@@ -15,3 +15,6 @@ jobs:
           SKM_SITE: https://skmovies-premium.pages.dev
           GH_TOKEN: ${${ secrets.GH_TOKEN }}
           GH_REPO: khadimsorder1-max/skmovies-cache
+          PAGES: 50
+          DETAILS: 1000
+          CONCURRENCY: 5
