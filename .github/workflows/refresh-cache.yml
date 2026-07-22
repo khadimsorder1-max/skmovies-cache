@@ -1,20 +1,63 @@
-name: Refresh SKMovies cache
+﻿name: Refresh SKMovies Mega Cache
+
 on:
   schedule:
-    - cron: '0 */6 * * *'
-  workflow_dispatch: {}
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: 'Sources to build (comma-separated, empty = all)'
+        required: false
+        default: ''
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '20' }
-      - run: node scripts/build_cache.js
+      - name: Checkout cache repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Checkout main project (for build script)
+        uses: actions/checkout@v4
+        with:
+          repository: khadimsorder1-max/skmovies-premium
+          token: ${{ secrets.GH_TOKEN }}
+          path: project
+        continue-on-error: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Copy build script (from project or use bundled)
+        run: |
+          if [ -f "project/scripts/build_cache.js" ]; then
+            cp project/scripts/build_cache.js ./build_cache.js
+            echo "Using build script from main project"
+          else
+            echo "Main project not available, using bundled script"
+            ls scripts/ 2>/dev/null && cp scripts/build_cache.js ./build_cache.js || echo "No bundled script found"
+          fi
+
+      - name: Run cache builder
         env:
           SKM_SITE: https://skmovies-premium.pages.dev
-          GH_TOKEN: ${${ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: khadimsorder1-max/skmovies-cache
-          PAGES: 50
-          DETAILS: 1000
-          CONCURRENCY: 5
+          PAGES: '30'
+          DETAILS: '500'
+          CONCURRENCY: '4'
+          SOURCES: ${{ github.event.inputs.sources }}
+        run: node build_cache.js
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Cache Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "Triggered: $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "Sources: ${SOURCES:-all}" >> $GITHUB_STEP_SUMMARY
+          echo "Files in repo: $(find . -name '*.json' | wc -l)" >> $GITHUB_STEP_SUMMARY
