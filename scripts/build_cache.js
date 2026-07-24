@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * SKMovies Mega Cache Builder v3.5.2
+ * SKMovies Mega Cache Builder v4.11.13
  * ---------------------------------------------------------------------------
  * Scrapes all sources DIRECTLY (bypassing CF Worker limits) and writes JSON
  * to GitHub repo for edge serving.
@@ -404,16 +404,25 @@ function getListUrl(src, page) {
   if (src === 'mlsbd') return SKM_SITE + '/api/latest?page=' + page;
   if (src === 'fdm') return SKM_SITE + '/api/fdm/latest?page=' + page;
   if (src === 'fibwatch') return SKM_SITE + '/api/fibwatch/latest?page=' + page;
+  if (src === 'fojik') return SKM_SITE + '/api/fojik/list?type=home&page=' + page;
+  if (src === 'krx18') return SKM_SITE + '/api/krx18/list?type=home&page=' + page;
+  if (src === 'nongor') return SKM_SITE + '/api/nongor/latest?page=' + page + '&sort=year_desc';
 }
 function getTrendingUrl(src) {
   if (src === 'mlsbd') return SKM_SITE + '/api/trending';
   if (src === 'fdm') return SKM_SITE + '/api/fdm/trending';
   if (src === 'fibwatch') return SKM_SITE + '/api/fibwatch/trending';
+  if (src === 'fojik') return SKM_SITE + '/api/fojik/list?type=home&page=1';
+  if (src === 'krx18') return SKM_SITE + '/api/krx18/list?type=home&page=1';
+  if (src === 'nongor') return SKM_SITE + '/api/nongor/latest?page=1&sort=top_rated';
 }
 function getMovieUrl(src, slug) {
   if (src === 'mlsbd') return SKM_SITE + '/api/movie?slug=' + encodeURIComponent(slug);
   if (src === 'fdm') return SKM_SITE + '/api/fdm/movie?slug=' + encodeURIComponent(slug);
   if (src === 'fibwatch') return SKM_SITE + '/api/fibwatch/movie?slug=' + encodeURIComponent(slug);
+  if (src === 'fojik') return SKM_SITE + '/api/fojik/movie?slug=' + encodeURIComponent(slug) + '&_cb=' + Date.now();
+  if (src === 'krx18') return SKM_SITE + '/api/krx18/movie?slug=' + encodeURIComponent(slug);
+  if (src === 'nongor') return SKM_SITE + '/api/nongor/movie?slug=' + encodeURIComponent(slug) + '&_cb=' + Date.now();
 }
 function respItems(r) { return r ? (r.movies || r.items || []) : []; }
 
@@ -452,18 +461,105 @@ async function buildGenericSource(src) {
   console.log('  ✓ ' + src + ' details: ' + res.ok + ' ok, ' + res.fail + ' fail');
 }
 
+
+// ── Fojik source ─────────────────────────────────────────────────────────
+async function buildFojik() {
+  console.log('\n=== Building cache: fojik (via SKM API + flatten) ===');
+  var allSlugs = new Set();
+  try {
+    var t = await fetchJson(getTrendingUrl('fojik'));
+    await githubPutFile('fojik/trending.json', JSON.stringify(t), 'cache: fojik trending');
+    console.log('  ✓ fojik/trending.json (' + respItems(t).length + ' items)');
+  } catch(e) { console.warn('  ✗ fojik trending: ' + e.message); }
+
+  for (var page = 1; page <= PAGES_PER_SOURCE; page++) {
+    try {
+      var data = await fetchJson(getListUrl('fojik', page));
+      var items = respItems(data);
+      if (items.length === 0) { console.log('  · fojik page ' + page + ': empty'); break; }
+      var filename = 'fojik/latest' + (page > 1 ? '-' + page : '') + '.json';
+      await githubPutFile(filename, JSON.stringify(data), 'cache: fojik page ' + page);
+      items.forEach(function(it) { if (it.slug) allSlugs.add(it.slug); });
+      console.log('  ✓ ' + filename + ' (' + items.length + ')');
+      if (data.hasMore === false) break;
+      await sleep(400);
+    } catch(e) { console.warn('  ✗ fojik page ' + page + ': ' + e.message); break; }
+  }
+  console.log('  → Total fojik slugs: ' + allSlugs.size);
+
+  var slugs = Array.from(allSlugs).slice(0, DETAILS_PER_SOURCE);
+  var tasks = slugs.map(function(slug) {
+    return async function() {
+      var data = await fetchJson(getMovieUrl('fojik', slug));
+      // [#v4.11.13] FLATTEN: if response has { movie: {...} } but no top-level downloads,
+      // merge movie fields to top level so frontend normalizeMovie() works.
+      if (data.movie && !data.downloads) {
+        data = Object.assign({}, data.movie, { ok: true, movie: data.movie });
+      }
+      if (!data.ok) throw new Error(data.error || 'not ok');
+      var safe = slug.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 200);
+      await githubPutFile('fojik/movie/' + safe + '.json', JSON.stringify(data), 'cache: fojik movie');
+      await sleep(400);
+    };
+  });
+  var res = await runWithConcurrency(tasks, CONCURRENCY);
+  console.log('  ✓ fojik details: ' + res.ok + ' ok, ' + res.fail + ' fail');
+}
+
+// ── Nongor source ────────────────────────────────────────────────────────
+async function buildNongor() {
+  console.log('\n=== Building cache: nongor (via SKM API) ===');
+  var allSlugs = new Set();
+  try {
+    var t = await fetchJson(getTrendingUrl('nongor'));
+    await githubPutFile('nongor/trending.json', JSON.stringify(t), 'cache: nongor trending');
+    console.log('  ✓ nongor/trending.json (' + respItems(t).length + ' items)');
+  } catch(e) { console.warn('  ✗ nongor trending: ' + e.message); }
+
+  for (var page = 1; page <= PAGES_PER_SOURCE; page++) {
+    try {
+      var data = await fetchJson(getListUrl('nongor', page));
+      var items = respItems(data);
+      if (items.length === 0) { console.log('  · nongor page ' + page + ': empty'); break; }
+      var filename = 'nongor/latest' + (page > 1 ? '-' + page : '') + '.json';
+      await githubPutFile(filename, JSON.stringify(data), 'cache: nongor page ' + page);
+      items.forEach(function(it) { if (it.slug) allSlugs.add(it.slug); });
+      console.log('  ✓ ' + filename + ' (' + items.length + ')');
+      if (data.hasMore === false) break;
+      await sleep(400);
+    } catch(e) { console.warn('  ✗ nongor page ' + page + ': ' + e.message); break; }
+  }
+  console.log('  → Total nongor slugs: ' + allSlugs.size);
+
+  var slugs = Array.from(allSlugs).slice(0, DETAILS_PER_SOURCE);
+  var tasks = slugs.map(function(slug) {
+    return async function() {
+      var data = await fetchJson(getMovieUrl('nongor', slug));
+      if (!data.ok) throw new Error(data.error || 'not ok');
+      var safe = slug.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 200);
+      await githubPutFile('nongor/movie/' + safe + '.json', JSON.stringify(data), 'cache: nongor movie');
+      await sleep(400);
+    };
+  });
+  var res = await runWithConcurrency(tasks, CONCURRENCY);
+  console.log('  ✓ nongor details: ' + res.ok + ' ok, ' + res.fail + ' fail');
+}
+
 // ── MAIN ────────────────────────────────────────────────────────────────────
 async function main() {
-  console.log('SKMovies Mega Cache Builder v3.5.2');
+  console.log('SKMovies Mega Cache Builder v4.11.13');
   console.log('  Site: ' + SKM_SITE + '  Repo: ' + GH_REPO + '  Pages: ' + PAGES_PER_SOURCE + '  Details: ' + DETAILS_PER_SOURCE);
   var requested = (process.env.SOURCES || '').split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-  var all = requested.length > 0 ? requested : ['moviebox', 'hdhub4u', 'hdhubmain', 'mlsbd', 'fdm', 'fibwatch'];
+  var all = requested.length > 0 ? requested : ['moviebox', 'hdhub4u', 'hdhubmain', 'mlsbd', 'fdm', 'fibwatch', 'fojik', 'krx18', 'nongor'];
   for (var i = 0; i < all.length; i++) {
     var src = all[i];
     try {
       if (src === 'moviebox') await buildMoviebox();
       else if (src === 'hdhub4u') await buildHDHub('hdhub4u', HDHUB4U_HOSTS);
       else if (src === 'hdhubmain') await buildHDHub('hdhubmain', HDHUBMAIN_HOSTS);
+      else if (src === 'fojik') await buildFojik();
+      else if (src === 'krx18') await buildGenericSource('krx18');
+      else if (src === 'nongor') await buildNongor();
       else await buildGenericSource(src);
     } catch(e) { console.error('FATAL ' + src + ': ' + e.message); }
   }
